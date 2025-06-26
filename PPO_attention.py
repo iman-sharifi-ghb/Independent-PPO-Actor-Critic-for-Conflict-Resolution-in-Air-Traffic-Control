@@ -79,7 +79,7 @@ class PPONetwork(nn.Module):
         return action_probs, value
 
 class PPO_Agent:
-    def __init__(self, state_size=6, context_size=5, action_size=3, num_intruders=3, lr=0.001, min_lr=0.0001, decay_episodes=1000):
+    def __init__(self, state_size=6, context_size=5, action_size=3, num_intruders=3, lr=1e-4, min_lr=1e-4, decay_episodes=1000):
         self.state_size = state_size
         self.context_size = context_size
         self.action_size = action_size
