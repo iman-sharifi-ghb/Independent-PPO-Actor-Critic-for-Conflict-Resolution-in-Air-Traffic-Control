@@ -49,7 +49,7 @@
   "routes": [
     {
       "flight_prefix": ["AA"],
-      "aircraft": ["eVTOL"],
+      "aircraft": ["Amzn"],
       "distribution": [
         {
           "name": "Monday",
@@ -59,7 +59,7 @@
           },
           "spacing": {
             "type": "rv_discrete",
-            "parameters": {"values": [[59, 60, 61], [0.3, 0.4, 0.3]]}
+            "parameters": {"values": [[55, 60, 65], [0.3, 0.4, 0.3]]}
           },
           "direction_forward_probability": 1,
           "flight_prefix_probabilities": [1],
@@ -69,37 +69,37 @@
       ],
       "end_waypoint_1": {
         "name": "WP4",
-        "speed": 40,
+        "speed": 45,
         "end": false 
       },
       "end_waypoint_2": {
         "name": "WP1",
-        "speed": 40,
+        "speed": 45,
         "end": false
       },
       "possible_paths": [
         [
           {
             "name": "WP1",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP3",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP9",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP4",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           }
@@ -108,7 +108,7 @@
     },
     {
       "flight_prefix": ["AB"],
-      "aircraft": ["eVTOL"],
+      "aircraft": ["Xwing"],
       "distribution": [
         {
           "name": "Monday",
@@ -118,7 +118,7 @@
           },
           "spacing": {
             "type": "rv_discrete",
-            "parameters": {"values": [[59, 60, 61], [0.3, 0.4, 0.3]]}
+            "parameters": {"values": [[55, 60, 65], [0.3, 0.4, 0.3]]}
           },
           "direction_forward_probability": 1,
           "flight_prefix_probabilities": [1],
@@ -167,7 +167,7 @@
     },
     {
       "flight_prefix": ["AC"],
-      "aircraft": ["eVTOL"],
+      "aircraft": ["Amzn"],
       "distribution": [
         {
           "name": "Monday",
@@ -177,7 +177,7 @@
           },
           "spacing": {
             "type": "rv_discrete",
-            "parameters": {"values": [[59, 60, 61], [0.3, 0.4, 0.3]]}
+            "parameters": {"values": [[55, 60, 65], [0.3, 0.4, 0.3]]}
           },
           "direction_forward_probability": 1,
           "flight_prefix_probabilities": [1],
@@ -187,37 +187,37 @@
       ],
       "end_waypoint_1": {
         "name": "WP8",
-        "speed": 40,
+        "speed": 45,
         "end": false
       },
       "end_waypoint_2": {
         "name": "WP5",
-        "speed": 40,
+        "speed": 45,
         "end": false
       },
       "possible_paths": [
         [
           {
             "name": "WP5",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP7",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP9",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           },
           {
             "name": "WP8",
-            "speed": 40,
+            "speed": 45,
             "altitude": "FL150",
             "end": false
           }
@@ -226,7 +226,7 @@
     },
     {
       "flight_prefix": ["AD"],
-      "aircraft": ["eVTOL"],
+      "aircraft": ["Xwing"],
       "distribution": [
         {
           "name": "Monday",
@@ -236,7 +236,7 @@
           },
           "spacing": {
             "type": "rv_discrete",
-            "parameters": {"values": [[59, 60, 61], [0.3, 0.4, 0.3]]}
+            "parameters": {"values": [[55, 60, 65], [0.3, 0.4, 0.3]]}
           },
           "direction_forward_probability": 1,
           "flight_prefix_probabilities": [1],
