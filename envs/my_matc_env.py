@@ -17,14 +17,21 @@ from .scenario.utils import haversine_distance, normalize
 
 DELTA_T = 3.0
 ZOOM = 10.0
-SPD_INCREMENT = 5.0 # knots
+SPD_INCREMENT = 10.0 # knots
 NOISE = False
+SAVE_SCENARIO = False
+MAX_MISSION_TIME = 15 * 60 # seconds
+
+# Company 1: Amazon
+# Company 2: Google Wing 
 
 # Velocities in knots
-MIN_SPD = 10 # (m/s) ~20 knots
-MAX_SPD = 30 # (m/s) ~60 knots
-AVG_SPD = 20.0 # (m/s) ~40 knots
-SPEED_RANGE = MAX_SPD - MIN_SPD
+MIN_SPD_COMPANY1 = 0 # (m/s) ~20 knots
+MIN_SPD_COMPANY2 = 0 # (m/s) ~20 knots
+MAX_SPD_COMPANY1 = 30 # (m/s) ~60 knots
+MAX_SPD_COMPANY2 = 44 # (m/s) ~85 knots
+SPEED_RANGE_COMPANY1 = MAX_SPD_COMPANY1 - MIN_SPD_COMPANY1
+SPEED_RANGE_COMPANY2 = MAX_SPD_COMPANY2 - MIN_SPD_COMPANY2
 ACC_RANGE = 1.0
 
 # North is 0 degrees, east is 90 degrees, south is 180 degrees, and west is -90 degrees
@@ -41,6 +48,7 @@ SAFETY_DIST = 500 * 0.000539957 # 400 meters to nautical miles
 MAX_DIST_COMPANY1 = 1000 * 0.00053995 # Maximum distance in nautical miles for company1
 MAX_DIST_COMPANY2 = 700 * 0.00053995 # Maximum distance in nautical miles for company2
 MISSION_ACCOMPLISHED_DIST = 0.05 * 0.000539957 # 0.5 nautical miles
+GOAL_RADIUS = 50 * 0.000539957 # 0.5 nautical miles
 
 STATE_SIZE = 6
 INTRUDER_STATE_SIZE = 5
@@ -51,7 +59,7 @@ W_LOS_REW = 1.0
 W_VEL_REW = 0.0
 W_ACT_REW = 0.0001
 W_TIME_REW = 1.0
-W_MISSION_REW = 0.001
+W_MISSION_REW = 0.1
 
 
 class ObservationTypes(Enum):
@@ -85,7 +93,6 @@ class MATCEnv(ParallelEnv):
         self.spd_increment = SPD_INCREMENT
         self.dt = DELTA_T
         self.zoom = ZOOM
-        self.max_spd_shift = 1
 
         # Initialize bluesky
         bs.init(mode='sim', detached=(self.render_mode != 'server'))
@@ -121,9 +128,10 @@ class MATCEnv(ParallelEnv):
         self.safety_distance = SAFETY_DIST
 
         # Speed limits
-        self.min_spd = metric_spd_to_knots_rounded(MIN_SPD)
-        self.avg_spd = metric_spd_to_knots_rounded(AVG_SPD)
-        self.max_spd = metric_spd_to_knots_rounded(MAX_SPD)
+        self.min_spd_company1 = metric_spd_to_knots_rounded(MIN_SPD_COMPANY1)
+        self.max_spd_company1 = metric_spd_to_knots_rounded(MAX_SPD_COMPANY1)
+        self.min_spd_company2 = metric_spd_to_knots_rounded(MIN_SPD_COMPANY2)
+        self.max_spd_company2 = metric_spd_to_knots_rounded(MAX_SPD_COMPANY2)
 
         self.min_acc = -ACC_RANGE
         self.max_acc = ACC_RANGE
@@ -133,7 +141,7 @@ class MATCEnv(ParallelEnv):
         self.agent_counter = {}
         self.truncated_agents = {}
         self.n_spawn = MAX_NUM_AGENTS
-        self.out_of_energy_time = 425
+        self.out_of_energy_time = int(MAX_MISSION_TIME / DELTA_T)
         self.collided_agents = []
         self.each_agent_rewards = {}
         self.previous_actions = {}
@@ -148,16 +156,8 @@ class MATCEnv(ParallelEnv):
         self.agent_phases = {}
         self.unsafe_agents = {}
 
-
-    @functools.lru_cache(maxsize=None)
-    def observation_space(self, agent):
-        low = np.array([OBSERVATION_BOUNDS[obs_type][0](self) if callable(OBSERVATION_BOUNDS[obs_type][0]) else OBSERVATION_BOUNDS[obs_type][0] for obs_type in ObservationTypes])
-        high = np.array([OBSERVATION_BOUNDS[obs_type][1](self) if callable(OBSERVATION_BOUNDS[obs_type][1]) else OBSERVATION_BOUNDS[obs_type][1] for obs_type in ObservationTypes])
-        return spaces.Sequence(spaces.Box(low, high), stack=True)
-
-    @functools.lru_cache(maxsize=None)
-    def action_space(self, agent):
-        return spaces.Discrete(self.max_spd_shift * 2 + 1, start=-self.max_spd_shift)
+        self.cmd_history = []
+        self.N_successful_agents = MAX_NUM_AGENTS
 
     def _stack(self, cmd: str, log: bool = False):
         # if log:
@@ -212,8 +212,10 @@ class MATCEnv(ParallelEnv):
         # make sure there is no agent in the simulation
         if len(self.agents) > 0:
             # Remove all agents from the simulation
+            print(f"Removing {len(self.agents)} agents from the simulation.")
             for agent in self.agents:
                 stack.stack(f'DEL {agent}')
+            self._sim_step()
 
         stack.stack('RESET')
         self._seed(seed)
@@ -232,8 +234,6 @@ class MATCEnv(ParallelEnv):
 
         stack.stack(f'DT {self.dt}')
         stack.stack('OP')
-        # stack.stack('FF 1')
-        # stack.stack('DTMULT 1')
 
         self.agent_init_wpts = {}
         for flight in self.schedule:
@@ -272,24 +272,20 @@ class MATCEnv(ParallelEnv):
 
             # draw a circle around waypoints
             # waypoint #3
-            aux_dist = 3000 * 0.000539957
-            self.draw_circle(name='C1', lat=33.18389, lon=-96.88552, radius=self.ownship_collision_dist)
-            self.draw_circle(name='C2', lat=33.18389, lon=-96.88552, radius=aux_dist)
+            # aux_dist = 3000 * 0.000539957
+            # self.draw_circle(name='C1', lat=33.18389, lon=-96.88552, radius=self.ownship_collision_dist)
+            # self.draw_circle(name='C2', lat=33.18389, lon=-96.88552, radius=aux_dist)
 
-            # # waypoint #7
-            aux_dist = 3000 * 0.000539957
-            self.draw_circle(name='C3', lat=33.13934, lon=-96.87712, radius=self.ownship_collision_dist)
-            self.draw_circle(name='C4', lat=33.13934, lon=-96.87712, radius=aux_dist)
+            # waypoint #7
+            # aux_dist = 3000 * 0.000539957
+            # self.draw_circle(name='C3', lat=33.13934, lon=-96.87712, radius=self.ownship_collision_dist)
+            # self.draw_circle(name='C4', lat=33.13934, lon=-96.87712, radius=aux_dist)
 
-            # # waypoint #9
+            # waypoint #9
             # self.draw_circle(name='C5', lat=33.16198, lon=-96.84680, radius=self.ownship_collision_dist)
             # self.draw_circle(name='C6', lat=33.16198, lon=-96.84680, radius=self.safety_distance)
 
-            stack.stack('DTMULT 0.1')
-
-        if save_scenario:
-            with open(scenario_name, 'w') as f:
-                f.write(stack.get_history())
+            # stack.stack('DTMULT 0.1')
 
         self.agent_route_ids = {}
         # Convert initial waypoints to route IDs for each agent
@@ -324,11 +320,69 @@ class MATCEnv(ParallelEnv):
         self.sum_episode_rewards = 0
         self.num_of_collisions = 0
         self.collided_agents = []
-        self.dones = {}
         self.agent_phases = {}
         self.unsafe_agents = {}
+        self.dones = {}
+
+        for flight in self.schedule:
+            # Initialize the agent counter
+            self.agent_counter[flight.flight_number] = 0
+            self.truncated_agents[flight.flight_number] = False
+            self.each_agent_rewards[flight.flight_number] = []
+            self.terminated_agents[flight.flight_number] = False
+            self.previous_actions[flight.flight_number] = 1
+            self.dones[flight.flight_number] = False
 
         return processed_observations, infos
+
+    def record_scenario(self, scenario_name='frisco.scn'):
+        """
+        Record the scenario to a file.
+        """
+        self.cmd_history = []
+        # Append commands to the command history
+        self.cmd_history.append("00:00:00.00>CDMETHOD STATEBASED")
+        self.cmd_history.append("00:00:00.00>TRAILS ON")
+        self.cmd_history.append("00:00:00.00>TAXI OFF 4")
+        self.cmd_history.append("00:00:00.00>PAN 30, -90")
+        self.cmd_history.append(f"00:00:00.00>ZOOM {self.zoom}")
+
+        agent_command_times = {}
+        for flight in self.schedule:
+            # Initialize the agent command times
+            agent_command_times[flight.flight_number] = 0.0
+
+        self.agent_init_wpts = {}
+        for flight in self.schedule:
+            origin = flight.path[0]
+            destination = flight.path[-1]
+            initial_heading = calculate_heading(origin.waypoint.coordinate, destination.waypoint.coordinate)
+            initial_speed = origin.speed 
+
+            # Update agent command times
+            agent_command_times[flight.flight_number] += flight.entry_time
+            self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>CRE {flight.flight_number} {flight.aircraft_type} {origin.waypoint.coordinate} {initial_heading} {origin.altitude} {initial_speed if not origin.end else 60}')    
+            if origin.end:
+                self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>ORIG {flight.flight_number} {origin.waypoint.name}')  
+            for wpt in flight.path[0:-1]:
+                self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>ADDWPT {flight.flight_number} {wpt.waypoint.name} {wpt.altitude},{wpt.speed}')
+        
+            if destination.end:
+                self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>DEST {flight.flight_number} {destination.waypoint.name}')     
+            else:
+                self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>ADDWPT {flight.flight_number} {destination.waypoint.name} {destination.altitude},{destination.speed}')
+            self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>{flight.flight_number} AT {destination.waypoint.name} STACK DEL {flight.flight_number}')
+
+            self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>LNAV {flight.flight_number} ON')      
+            self.cmd_history.append(f'00:00:{agent_command_times[flight.flight_number]:.2f}>VNAV {flight.flight_number} ON')
+            self.cmd_history.append('\n')
+        
+        with open(scenario_name, 'w') as f:
+            for cmd in self.cmd_history:
+                f.write(cmd + '\n')
+        f.close()
+        print(f'Scenario recorded to {scenario_name}')
+
 
     @property
     def agents(self):
@@ -451,17 +505,13 @@ class MATCEnv(ParallelEnv):
                 stack.stack(f'DEL {agent}')
 
     def check_done(self, agent):
-        if agent in self.truncated_agents.keys() or agent in self.terminated_agents.keys():
-            if self.truncated_agents[agent] or self.terminated_agents[agent]:
-                return True
+        if self.truncated_agents[agent] or self.terminated_agents[agent]:
+            return True
         else:
             return False
 
     def check_done_agents(self, current_step_agents):
         for agent in current_step_agents:
-            if agent not in self.dones.keys():
-                self.dones[agent] = False
-
             if self.check_done(agent):
                 self.dones[agent] = True
 
@@ -470,7 +520,13 @@ class MATCEnv(ParallelEnv):
             if agent in self.truncated_agents.keys():
                 del observations[agent]
         return observations
-     
+    
+    def get_agent_time(self, agent):
+        # Extract the agent counter
+        agent_cnt = self.agent_counter.get(agent, 0)
+        agent_time = agent_cnt * self.dt
+        return agent_time
+
     def get_spd(self, agent):
         ac_id = bs.traf.id2idx(agent)
         if ac_id == -1:
@@ -559,6 +615,14 @@ class MATCEnv(ParallelEnv):
     def observations(self, current_step_agents):
         return {agent: self.observation(agent) for agent in current_step_agents}
     
+    def get_num_successful_agents(self):
+        # Find the number of agents that have not been truncated
+        num_successful_agents = 0
+        for agent in self.truncated_agents.keys():
+            if not self.truncated_agents[agent]:
+                num_successful_agents += 1
+        return num_successful_agents
+
     def distance_reward(self, distance):
         if distance <= self.ownship_collision_dist:
             return -1, 1
@@ -578,15 +642,17 @@ class MATCEnv(ParallelEnv):
         else:
             current_spd = int(metric_spd_to_knots_rounded(bs.traf.cas[ac_id]))
             # velocity_reward = -(current_spd / desired_spd - 1) ** 2
-            if current_spd < self.min_spd or current_spd > self.max_spd:
+            if current_spd < self.get_min_spd(agent) or current_spd > self.get_max_spd(agent):
                 velocity_reward = -1
         
         return velocity_reward
 
     def mission_accomplished_reward(self, agent):
         if self.check_mission_accomplished(agent):
+            self.terminated_agents[agent] = True
             return 1.0
         return 0.0
+    
     def check_mission_accomplished(self, agent):
         """
         Check if the agent has reached its destination waypoint.
@@ -599,52 +665,27 @@ class MATCEnv(ParallelEnv):
         # Calculate the distance to the destination waypoint
         distance_to_destination = haversine_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], final_wpt_lat, final_wpt_lon)
         # Check if the distance is less than the threshold
-        return distance_to_destination < MAX_DIST_GOAL
+        return distance_to_destination < GOAL_RADIUS
     
     def reward(self, agent):
 
-        if agent not in self.truncated_agents.keys():
-            self.truncated_agents[agent] = False
-
         if self.truncated_agents[agent] or self.check_termination(agent):
-            return -2
+            return self.last_rewards[agent] if agent in self.last_rewards.keys() else 0.0
         else:
             # Velocity Reward = (current speed/desired speed - 1)^2
             velocity_reward = self.velocity_reward(agent)
             
-            # Count agent for each time step
-            if agent not in self.agent_counter.keys():
-                self.agent_counter[agent] = 0
-            self.agent_counter[agent] += 1
-
             # Encouraging agents to finish the route
-            # truncated_flag = False
-            # if self.agent_counter[agent] == self.out_of_energy_time:
-            #     time_reward = -1
-            #     self.truncated_agents[agent] = True
-            # elif self.agent_counter[agent] > self.out_of_energy_time:
-            #     time_reward = -1
-            #     self.truncated_agents[agent] = True
-            # else:
-            #     if agent in self.terminated_agents:
-            #         time_reward = 1
-            #         truncated_flag = True
-            #     else:
-            #         if not truncated_flag:
-            #             time_reward = -0.001
-            #             self.truncated_agents[agent] = False
-            #         else:
-            #             time_reward = 0
-            
-            # Encouraging agents to finish the route
-            time_reward = 0
-            # if self.truncated_agents[agent]:
-            #     time_reward = 0
-            # else:
-            #     time_reward = 0
-            #     if self.agent_counter[agent] == self.out_of_energy_time:
-            #         time_reward = -1
-            #         self.truncated_agents[agent] = True
+            time_reward = -1e-4
+            if self.truncated_agents[agent]:
+                time_reward = 0
+            else:
+                time_reward = 0
+                agent_time = self.get_agent_time(agent)
+                if agent_time >= MAX_MISSION_TIME:
+                    time_reward = -1
+                    print(f"Agent {agent} has reached the maximum mission time: {agent_time} seconds")
+                    self.truncated_agents[agent] = True
 
             # action reward ******************************************************************
             # if action is not equal to the previous action receives -1
@@ -725,7 +766,6 @@ class MATCEnv(ParallelEnv):
 
             return np.float64(total_reward)
     
-
     def rewards(self, previous_step_agents):
         return {agent: self.reward(agent) for agent in previous_step_agents}
     
@@ -889,6 +929,30 @@ class MATCEnv(ParallelEnv):
                 }
 
         return closest_distances
+    
+    def get_max_spd(self, agent):
+        """
+        Returns the maximum speed for the agent based on its company.
+        """
+        agent_company = self.get_agent_company(agent)
+        if agent_company == 'company1':
+            return self.max_spd_company1
+        elif agent_company == 'company2':
+            return self.max_spd_company2
+        else:
+            return max(self.max_spd_company1, self.max_spd_company2)
+        
+    def get_min_spd(self, agent):
+        """
+        Returns the minimum speed for the agent based on its company.
+        """
+        agent_company = self.get_agent_company(agent)
+        if agent_company == 'company1':
+            return self.min_spd_company1
+        elif agent_company == 'company2':
+            return self.min_spd_company2
+        else:
+            return min(self.min_spd_company1, self.min_spd_company2)
 
     def step(self, actions):
         """
@@ -902,10 +966,15 @@ class MATCEnv(ParallelEnv):
             truncations (dict): Truncation flags for each agent.
             dones (dict): Done flags for each agent.
         """
-        # self.draw_circle()
         if not actions:
             return {}, {}, {}, {}, {}
         
+        # Count agent for each time step
+        for agent in actions.keys():
+            if agent not in self.agent_counter.keys():
+                self.agent_counter[agent] = 0
+            self.agent_counter[agent] += 1
+
         # update actions
         self.actions = actions
 
@@ -934,7 +1003,7 @@ class MATCEnv(ParallelEnv):
             if action != 1:               
                 cur_ac_spd = metric_spd_to_knots_rounded(bs.traf.cas[ac_id])
                 new_ac_spd = int(cur_ac_spd) + (action - 1) * self.spd_increment
-                new_ac_spd = min(max(new_ac_spd, self.min_spd), self.max_spd)
+                new_ac_spd = min(max(new_ac_spd, self.get_min_spd(agent)), self.get_max_spd(agent))
                 # print(f"Current speed: {cur_ac_spd} New speed: {new_ac_spd}")
                 stack.stack(f'SPD {flight_number} {new_ac_spd}')
 
@@ -968,8 +1037,10 @@ class MATCEnv(ParallelEnv):
         # Truncate and terminate agents after receiving next observations and rewards
         self.truncate_agents()
         self.terminate_agents()
-        self.check_done_agents(previous_step_agents)
+        self.check_done_agents(current_step_agents)
 
+        self.last_rewards = rewards
+        
         return processed_observations, rewards, terminations, truncations, self.dones
 
     def extract_states(self, agent, observations):
@@ -992,7 +1063,7 @@ class MATCEnv(ParallelEnv):
         # print(f"Agent: {agent}, v_x: {v_x}, v_y: {v_y}")
 
         # Normalize velocity components
-        spd_normalized = normalize(abs(spd), self.min_spd, self.max_spd)
+        spd_normalized = normalize(abs(spd), self.get_min_spd(agent), self.get_max_spd(agent))
         hdg_normalized = normalize(hdg, 0, HDG_RANGE)
         acc_normalized = normalize(acc, self.min_acc, self.max_acc)
         # print(f'v_x_normalized: {v_x_normalized}, v_y_normalized: {v_y_normalized}')
@@ -1050,7 +1121,7 @@ class MATCEnv(ParallelEnv):
 
                 # Calculate and normalize relative velocity
                 intruder_velocity = np.array([obs[0][2]])
-                normalized_int_vel = normalize(intruder_velocity, self.min_spd, self.max_spd)
+                normalized_int_vel = normalize(intruder_velocity, self.get_min_spd(agent), self.get_max_spd(agent))
 
                 # Relative heading
                 intruder_heading = np.array([obs[0][3]])
@@ -1110,7 +1181,7 @@ class MATCEnv(ParallelEnv):
 
                 # Calculate and normalize relative velocity
                 intruder_velocity = np.array([obs[0][2]])
-                normalized_int_vel = normalize(intruder_velocity, self.min_spd, self.max_spd)
+                normalized_int_vel = normalize(intruder_velocity, self.get_min_spd(agent), self.get_max_spd(agent))
 
                 # Relative heading
                 intruder_heading = np.array([obs[0][3]])
